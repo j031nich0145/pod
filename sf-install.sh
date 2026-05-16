@@ -1,28 +1,30 @@
 #!/bin/bash
-# SupaFantastic local installer
-# =============================
-# One-time setup on your laptop:
-#   - Copy maestro_global.py, app.py, setup_supafantastic_runpod.sh, supa.sh
-#     into ~/runpod/
-#   - Add `sf` alias to ~/.bashrc (idempotent)
-#   - Ensure ~/.ssh/runpod_supa exists
-#   - Validate or create ~/runpod/supa_config.env
+# SupaFantastic installer — /pod edition
+# ======================================
+# One-time setup:
+#   - Copies maestro_runpod.py, maestro_vast.py, app.py, supa.sh → ~/pod/
+#   - Installs Python deps
+#   - Generates ~/.ssh/pod_key if missing
+#   - Creates ~/pod/supa_config.env if missing
+#   - Adds `sf` alias to ~/.bashrc and ~/.zshrc
 #
-# Run from the directory containing the source files. Re-runnable safely.
+# Re-runnable safely.
 
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
-DEST="${HOME}/runpod"
-BASHRC="${HOME}/.bashrc"
-SSH_KEY="${HOME}/.ssh/runpod_supa"
+DEST="${HOME}/pod"
+SSH_KEY="${HOME}/.ssh/pod_key"
 CONFIG="${DEST}/supa_config.env"
+BASHRC="${HOME}/.bashrc"
 
-REQUIRED_FILES=(maestro_global.py app.py setup_supafantastic_runpod.sh supa.sh)
+REQUIRED_FILES=(maestro_runpod.py maestro_vast.py app.py supa.sh)
 
 echo "==> Source: ${SRC}"
 echo "==> Dest:   ${DEST}"
+echo
 
+# ── Preflight ──────────────────────────────────────────────────────────────
 for f in "${REQUIRED_FILES[@]}"; do
   if [ ! -f "${SRC}/${f}" ]; then
     echo "ERROR: missing source file: ${SRC}/${f}"
@@ -30,92 +32,145 @@ for f in "${REQUIRED_FILES[@]}"; do
   fi
 done
 
+# ── Create dest dir ────────────────────────────────────────────────────────
 echo "==> Creating ${DEST}/"
 mkdir -p "${DEST}"
 chmod 700 "${DEST}"
 
+# ── Copy scripts (skip if src == dest) ────────────────────────────────────
 echo "==> Copying scripts"
 for f in "${REQUIRED_FILES[@]}"; do
-  cp "${SRC}/${f}" "${DEST}/${f}"
+  if [ "$(realpath "${SRC}/${f}")" = "$(realpath "${DEST}/${f}" 2>/dev/null || echo '')" ]; then
+    echo "  ${f} — already in place"
+  else
+    cp "${SRC}/${f}" "${DEST}/${f}"
+    echo "  ${f}"
+  fi
 done
-chmod +x "${DEST}/supa.sh" "${DEST}/setup_supafantastic_runpod.sh"
+chmod +x "${DEST}/supa.sh"
 
-echo "==> Python deps"
-if ! python3 -c "import flask, flask_cors, requests" >/dev/null 2>&1; then
-  echo "Installing flask flask-cors requests --user..."
-  python3 -m pip install --user --quiet flask flask-cors requests
+# ── React build ────────────────────────────────────────────────────────────
+FRONTEND_DIR="${DEST}/SupaFantasticLLM/app/frontend"
+if [ -d "${FRONTEND_DIR}" ]; then
+  if [ ! -d "${FRONTEND_DIR}/build" ]; then
+    echo "==> Building React UI..."
+    (cd "${FRONTEND_DIR}" && npm install --silent && npm run build)
+    echo "  Built."
+  else
+    echo "==> React build exists — skipping (run 'npm run build' manually to update)"
+  fi
 else
-  echo "Already installed."
+  echo "==> React source not found at ${FRONTEND_DIR}"
+  echo "    Clone the repo into ${DEST}/SupaFantasticLLM first."
 fi
 
+# ── Python deps ────────────────────────────────────────────────────────────
+echo "==> Python deps"
+NEEDED=()
+python3 -c "import flask"         2>/dev/null || NEEDED+=(flask)
+python3 -c "import flask_cors"    2>/dev/null || NEEDED+=(flask-cors)
+python3 -c "import requests"      2>/dev/null || NEEDED+=(requests)
+python3 -c "import paramiko"      2>/dev/null || NEEDED+=(paramiko)
+python3 -c "import flask_sock"    2>/dev/null || NEEDED+=(flask-sock)
+
+if [ ${#NEEDED[@]} -gt 0 ]; then
+  echo "  Installing: ${NEEDED[*]}"
+  python3 -m pip install --user --quiet "${NEEDED[@]}"
+else
+  echo "  All deps already installed."
+fi
+
+# ── SSH key ────────────────────────────────────────────────────────────────
 echo "==> SSH key"
 if [ ! -f "${SSH_KEY}" ]; then
   mkdir -p "$(dirname "${SSH_KEY}")"
   chmod 700 "$(dirname "${SSH_KEY}")"
-  ssh-keygen -t ed25519 -f "${SSH_KEY}" -N "" -C "runpod_supa_auto"
+  ssh-keygen -t ed25519 -f "${SSH_KEY}" -N "" -C "pod_key_supafantastic"
   echo "  Created ${SSH_KEY}"
 else
   echo "  ${SSH_KEY} already exists."
 fi
 chmod 600 "${SSH_KEY}"
 
+echo
+echo "  Public key (add to console.vast.ai/manage-keys/ and RunPod console):"
+echo "  ──────────────────────────────────────────────────────────────────────"
+cat "${SSH_KEY}.pub"
+echo "  ──────────────────────────────────────────────────────────────────────"
+echo
+
+# ── Config ─────────────────────────────────────────────────────────────────
 echo "==> Config file"
 if [ ! -f "${CONFIG}" ]; then
-  cat > "${CONFIG}" <<'EOF'
-# SupaFantastic config — edit values, then save.
-# ALL of these are read by maestro_global.py and app.py.
+  cat > "${CONFIG}" << 'EOF'
+# SupaFantastic config — fill in API keys, rest is managed automatically.
 
-RUNPOD_API_KEY=""             # REQUIRED: from RunPod console → API Keys
-HF_TOKEN=""                   # Optional: improves HuggingFace rate limits
-GITHUB_TOKEN=""               # Only if you clone a private repo on pod
-GITHUB_USER="j031nich0145"
-REPO_NAME="SupaFantasticLLM"
+# ── API keys ──────────────────────────────────────────────────────────────
+RUNPOD_API_KEY=""           # RunPod console → API Keys
+VAST_API_KEY=""             # console.vast.ai/api-keys
+HF_TOKEN=""                 # HuggingFace — optional, improves download rate
 
-POD_ID=""                     # Filled by maestro on first create
-SSH_HOST=""                   # Filled by maestro after SSH succeeds
+# ── Runtime state (managed by maestro — do not edit manually) ─────────────
+PROVIDER=""                 # "runpod" | "vast"
+ACTIVE_MODEL="qwen-coder"   # qwen-coder | deepseek-r1
+
+# RunPod
+POD_ID=""
+SSH_HOST=""
 SSH_PORT=""
-SSH_KEY=""                    # Filled by maestro (defaults to ~/.ssh/runpod_supa)
-SSH_PUBLIC_KEY=""
-UI_URL=""
 
-ACTIVE_MODEL="qwen-coder"     # qwen-coder | deepseek-r1
+# Vast.ai
+VAST_INSTANCE_ID=""
+VAST_SSH_HOST=""
+VAST_SSH_PORT=""
+VAST_VLLM_URL=""
 EOF
   chmod 600 "${CONFIG}"
-  echo "  Wrote template ${CONFIG}"
-  echo "  >>> EDIT IT: at minimum, fill RUNPOD_API_KEY"
+  echo "  Created ${CONFIG}"
+  echo "  >>> EDIT IT: fill in RUNPOD_API_KEY and/or VAST_API_KEY"
 else
-  echo "  ${CONFIG} already exists. Leaving as-is."
+  echo "  ${CONFIG} already exists — leaving as-is."
 fi
 
+# ── sf alias ───────────────────────────────────────────────────────────────
 echo "==> sf alias"
 ALIAS_LINE="alias sf='${DEST}/supa.sh'"
-if grep -qxF "${ALIAS_LINE}" "${BASHRC}" 2>/dev/null; then
-  echo "  Already in ${BASHRC}"
-else
-  echo "" >> "${BASHRC}"
-  echo "# SupaFantastic launcher" >> "${BASHRC}"
-  echo "${ALIAS_LINE}" >> "${BASHRC}"
-  echo "  Appended to ${BASHRC}"
-fi
 
-# Also add to zshrc if it exists (mac users)
-if [ -f "${HOME}/.zshrc" ]; then
-  if ! grep -qxF "${ALIAS_LINE}" "${HOME}/.zshrc"; then
-    echo "" >> "${HOME}/.zshrc"
-    echo "# SupaFantastic launcher" >> "${HOME}/.zshrc"
-    echo "${ALIAS_LINE}" >> "${HOME}/.zshrc"
-    echo "  Also appended to ${HOME}/.zshrc"
-  fi
-fi
+add_alias() {
+  local rc="$1"
+  [ -f "${rc}" ] || return 0
+  # Wipe every existing sf alias line regardless of path
+  sed -i '/^alias sf=/d' "${rc}"
+  # Append fresh one
+  { echo ""; echo "# SupaFantastic launcher"; echo "${ALIAS_LINE}"; } >> "${rc}"
+  echo "  Set in ${rc}: ${ALIAS_LINE}"
+}
 
+add_alias "${BASHRC}"
+[ -f "${HOME}/.zshrc" ] && add_alias "${HOME}/.zshrc"
+
+# Apply immediately to current shell without requiring source
+eval "${ALIAS_LINE}"
+echo "  Alias active in this shell now (no source needed)"
+
+# ── Done ───────────────────────────────────────────────────────────────────
 echo
-echo "============================================================"
-echo "Install complete."
+echo "════════════════════════════════════════════════════════════"
+echo "  ✅ SupaFantastic install complete"
+echo "════════════════════════════════════════════════════════════"
 echo
-echo "Next steps:"
-echo "  1. Edit ${CONFIG} and set RUNPOD_API_KEY"
-echo "     (rotate any leaked key from the RunPod console first)"
-echo "  2. Source your shell config:    source ~/.bashrc"
-echo "  3. Run:                          sf"
-echo "  4. Browser opens to localhost:5000 — hit 'Start Backend'"
-echo "============================================================"
+echo "  1. Edit ${CONFIG}"
+echo "     Fill in RUNPOD_API_KEY and/or VAST_API_KEY"
+echo
+echo "  2. Add SSH public key (shown above) to:"
+echo "     • RunPod:   console.runpod.io → Settings → SSH Keys"
+echo "     • Vast.ai:  console.vast.ai/manage-keys/"
+echo
+echo "  3. Reload shell:"
+echo "     source ~/.bashrc"
+echo
+echo "  4. Launch:"
+echo "     sf"
+echo
+echo "  Browser opens at http://localhost:5000"
+echo "════════════════════════════════════════════════════════════"

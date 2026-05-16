@@ -416,14 +416,9 @@ def _build_maestro_args(action: str, *, force_rebuild: bool = True,
                         model: Optional[str] = None) -> list[str]:
     if not MAESTRO_SCRIPT.exists():
         raise FileNotFoundError(f"Missing maestro script: {MAESTRO_SCRIPT}")
-
     args = [PYTHON_BIN, str(MAESTRO_SCRIPT), action]
     if action == "start":
-        if force_rebuild:
-            args.append("--yes-global-rebuild")
-        args.append("--no-open-browser")
         args.append("--json-events")
-        args.append("--skip-if-running")
         if model:
             args.extend(["--model", model])
     return args
@@ -448,7 +443,14 @@ def runpod_start():
     if model not in MODELS:
         return jsonify({"success": False, "error": f"Unknown model '{model}'"}), 400
 
-    # Persist requested model so /chat falls through to the right default.
+    # Validate key before spawning
+    env = load_config()
+    if not env.get("RUNPOD_API_KEY", "").strip():
+        return jsonify({
+            "success": False,
+            "error": "RUNPOD_API_KEY not set in ~/pod/supa_config.env — add your key and restart.",
+        }), 400
+
     save_config_field("ACTIVE_MODEL", model)
 
     try:
@@ -815,7 +817,7 @@ def _build_vast_args(action: str, model: Optional[str] = None) -> list[str]:
         raise FileNotFoundError(f"Missing: {MAESTRO_VAST_SCRIPT}")
     args = [PYTHON_BIN, str(MAESTRO_VAST_SCRIPT), action]
     if action == "start":
-        args += ["--no-open-browser", "--json-events"]
+        args += ["--json-events"]
         if model:
             args += ["--model", model]
     return args
@@ -864,6 +866,21 @@ def vastai_start():
     if model not in MODELS:
         return jsonify({"success": False, "error": f"Unknown model '{model}'"}), 400
 
+    # Validate key and SSH key before spawning
+    env = load_config()
+    vast_key = env.get("VAST_API_KEY", "").strip()
+    if not vast_key:
+        return jsonify({
+            "success": False,
+            "error": "VAST_API_KEY not set in ~/pod/supa_config.env — add your key and restart.",
+        }), 400
+    ssh_key = Path.home() / ".ssh" / "pod_key"
+    if not ssh_key.exists():
+        return jsonify({
+            "success": False,
+            "error": f"SSH key not found: {ssh_key}\nGenerate: ssh-keygen -t ed25519 -f {ssh_key} -N ''\nThen add {ssh_key}.pub to console.vast.ai/manage-keys/",
+        }), 400
+
     save_config_field("ACTIVE_MODEL", model)
 
     try:
@@ -884,7 +901,6 @@ def vastai_start():
         _active_job_id = job_id
         job.start()
 
-    # When the job finishes, start the SSH tunnel automatically
     def _on_finish():
         job.thread.join()
         if job.returncode == 0:

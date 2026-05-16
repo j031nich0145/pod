@@ -30,10 +30,11 @@ DISK_GB      = 80
 SEARCH_FILTER = {
     "gpu_ram":       {"gte": 24000},
     "num_gpus":      {"eq": 1},
-    "reliability":   {"gte": 0.95},
+    "reliability":   {"gte": 0.98},    # raised from 0.95 — fewer CDI failures
     "disk_space":    {"gte": DISK_GB},
     "rentable":      {"eq": True},
     "cuda_max_good": {"gte": 12.0},
+    "direct_port_count": {"gte": 1},   # direct port hosts have better driver configs
 }
 
 MODELS: Dict[str, Dict] = {
@@ -57,7 +58,7 @@ ALLOC_STUCK_S  = 5 * 60    # if still "created" after this → bad host, retry
 SSH_TIMEOUT_S  = 30 * 60
 VLLM_TIMEOUT_S = 25 * 60
 
-MAX_OFFER_RETRIES = 5       # try up to 5 different hosts before giving up
+MAX_OFFER_RETRIES = 8       # try up to 8 different hosts — CDI failures happen ~30% of the time
 
 # ETA guidance shown in log
 PHASE_ETA = {
@@ -180,8 +181,8 @@ def ssh_probe(host: str, port: int) -> bool:
 
 def wait_for_ssh(key: str, iid: int) -> Tuple[str, int]:
     """
-    Wait for SSH. Detects stuck 'created' hosts (bad CDI/GPU driver) and
-    signals failure so the caller can retry with a different offer.
+    Wait for SSH. Detects stuck 'created' hosts (bad CDI/GPU driver).
+    Shows Docker image pull progress using disk_util / disk_usage from the API.
     """
     deadline    = time.time() + SSH_TIMEOUT_S
     start       = time.time()
@@ -189,6 +190,8 @@ def wait_for_ssh(key: str, iid: int) -> Tuple[str, int]:
     status_since: Dict[str, float] = {}
     ssh_host    = ""
     ssh_port    = 22
+    # vllm/vllm-openai:latest is ~20GB on disk after extraction
+    IMAGE_SIZE_GB = 20.0
 
     while time.time() < deadline:
         elapsed = int(time.time() - start)
@@ -198,27 +201,64 @@ def wait_for_ssh(key: str, iid: int) -> Tuple[str, int]:
             ssh_host = inst.get("ssh_host") or inst.get("public_ipaddr", "") or ssh_host
             ssh_port = int(inst.get("ssh_port") or ssh_port)
 
+            # ── Instant bad host detection via status_msg ─────────
+            # Vast.ai reports the Docker/CDI error in status_msg immediately.
+            # Don't wait 5 minutes — bail as soon as we see the error text.
+            status_msg = inst.get("status_msg", "") or ""
+            CDI_SIGNALS = ("CDI", "OCI runtime", "unresolvable", "failed to create", "failed to start containers")
+            if any(sig.lower() in status_msg.lower() for sig in CDI_SIGNALS):
+                log(f"  ✗ Bad host detected immediately — CDI/GPU error:")
+                log(f"    {status_msg[:120]}")
+                log(f"  Terminating {iid} and trying next offer...")
+                event("host_bad", iid=iid, status=status, reason="CDI", msg=status_msg[:80])
+                destroy_instance(key, iid)
+                return "", 0
+
             if status != last_status:
                 status_since[status] = time.time()
                 last_status = status
 
-            phase = PHASE_ETA.get(status, f"status={status}")
+            # ── Progress line ─────────────────────────────────────
+            if status == "loading":
+                # disk_util = % of allocated disk used (0-100)
+                # disk_usage = GB used on disk
+                disk_pct  = inst.get("disk_util")    # 0-100 float
+                disk_gb   = inst.get("disk_usage")   # GB float
+                status_msg = inst.get("status_msg", "")
+
+                if disk_gb and float(disk_gb) > 0.5:
+                    dgb  = float(disk_gb)
+                    prog = min(100, (dgb / IMAGE_SIZE_GB) * 100)
+                    bar  = "█" * int(prog / 5) + "░" * (20 - int(prog / 5))
+                    phase = f"Docker pull: {dgb:.1f}GB / ~{IMAGE_SIZE_GB:.0f}GB [{bar}] {prog:.0f}%"
+                elif disk_pct and float(disk_pct) > 0:
+                    dpct = float(disk_pct)
+                    bar  = "█" * int(dpct / 5) + "░" * (20 - int(dpct / 5))
+                    phase = f"Docker pull: {dpct:.0f}% of disk [{bar}]"
+                else:
+                    phase = f"Pulling Docker image ~20GB... (10-20 min, please wait)"
+                    if status_msg: phase += f" — {status_msg}"
+
+            elif status == "created":
+                phase = f"Allocating host... (0-2 min)"
+            elif status == "running":
+                phase = f"Container up, probing SSH..."
+            else:
+                phase = f"status={status}"
+
             log(f"  [{elapsed}s] {phase}  ssh={ssh_host}:{ssh_port}")
             event("wait_ssh_poll", status=status, host=ssh_host, port=ssh_port, elapsed=elapsed)
 
             # ── Bad host detection ────────────────────────────────
-            # If stuck in 'created' for >ALLOC_STUCK_S, the host's GPU/CDI is broken.
-            # Common error: "unresolvable CDI devices" — Docker can't access the GPU.
             if status in ("created", "allocating", "exited"):
                 since = time.time() - status_since.get(status, time.time())
                 if since > ALLOC_STUCK_S:
                     log(f"  ⚠ Stuck in '{status}' for {int(since//60)}m — bad host (GPU/CDI error)")
-                    log(f"  Terminating instance {iid} and trying a different offer...")
+                    log(f"  Terminating {iid} and trying a different offer...")
                     event("host_bad", iid=iid, status=status, stuck_s=int(since))
                     destroy_instance(key, iid)
-                    return "", 0   # signal: retry with next offer
+                    return "", 0
 
-            # Probe SSH regardless of reported status
             if ssh_host and ssh_port:
                 if ssh_probe(ssh_host, ssh_port):
                     return ssh_host, ssh_port
@@ -231,36 +271,75 @@ def wait_for_ssh(key: str, iid: int) -> Tuple[str, int]:
 
 def wait_for_vllm(host: str, port: int, iid: int) -> None:
     log("Waiting for vLLM...")
-    log(f"  ETA: ~12-15 min for model download + ~2 min warmup")
+    log(f"  Phase 1: Model download from HuggingFace (~18GB, ~10-15 min)")
+    log(f"  Phase 2: vLLM warmup (~2-3 min)")
     log(f"  Live log: ssh -i {SSH_KEY} root@{host} -p {port} 'tail -f /workspace/logs/vllm.log'")
     event("wait_vllm_begin", iid=iid)
 
-    deadline = time.time() + VLLM_TIMEOUT_S
-    start    = time.time()
+    deadline   = time.time() + VLLM_TIMEOUT_S
+    start      = time.time()
+    MODEL_SIZE = 18.0  # AWQ-32B ~18GB
 
     while time.time() < deadline:
         elapsed = int(time.time() - start)
 
+        cmd = (
+            "VLLM_OK=$(curl -fsS http://localhost:8000/v1/models 2>/dev/null && echo ok || true); "
+            "DL_GB=$(du -sh /workspace/models 2>/dev/null | awk '{print $1}' || echo 0); "
+            "LOG_TAIL=$(tail -1 /workspace/logs/vllm.log 2>/dev/null || true); "
+            "echo \"VLLM=$VLLM_OK|DL=$DL_GB|LOG=$LOG_TAIL\""
+        )
         probe = subprocess.run(
             ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
              "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "IdentitiesOnly=yes",
-             "-i", str(SSH_KEY), f"root@{host}", "-p", str(port),
-             "curl -fsS http://localhost:8000/v1/models 2>/dev/null && echo vllm_ok || "
-             "tail -3 /workspace/logs/vllm.log 2>/dev/null || echo waiting"],
-            capture_output=True, text=True, timeout=20,
+             "-i", str(SSH_KEY), f"root@{host}", "-p", str(port), cmd],
+            capture_output=True, text=True, timeout=25,
         )
         out = probe.stdout.strip()
-        if "vllm_ok" in out:
+
+        if "VLLM=ok" in out:
             log(f"✅ vLLM ready! ({elapsed}s = {elapsed//60}m {elapsed%60}s)")
             event("vllm_ready", elapsed_s=elapsed)
             return
 
-        # Estimate progress
-        eta_remaining = max(0, (12*60) - elapsed)
-        eta_str = f"~{eta_remaining//60}m remaining" if eta_remaining > 60 else "almost ready..."
-        for line in out.splitlines()[-2:]:
-            if line.strip(): log(f"  [{elapsed}s / {eta_str}] {line.strip()}")
-        if not out.strip(): log(f"  [{elapsed}s / {eta_str}] waiting...")
+        # Parse progress fields
+        vllm_ok = dl_gb = log_tail = ""
+        for part in out.split("|"):
+            if part.startswith("DL="):
+                dl_gb = part[3:].strip()
+            elif part.startswith("LOG="):
+                log_tail = part[4:].strip()
+
+        # Build progress line
+        eta_remaining = max(0, int((MODEL_SIZE / 18.0) * 750) - elapsed)
+        eta_str = f"~{eta_remaining//60}m remaining" if eta_remaining > 30 else "almost ready..."
+
+        if dl_gb and dl_gb not in ("0", "0B", ""):
+            # Try to parse GB value for a progress bar
+            try:
+                size_str = dl_gb.upper()
+                if "G" in size_str:
+                    downloaded = float(size_str.replace("G","").replace("B","").strip())
+                    pct = min(100, (downloaded / MODEL_SIZE) * 100)
+                    bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+                    progress = f"Model download: {downloaded:.1f}GB / ~{MODEL_SIZE:.0f}GB [{bar}] {pct:.0f}%"
+                elif "M" in size_str:
+                    downloaded_mb = float(size_str.replace("M","").replace("B","").strip())
+                    pct = min(100, (downloaded_mb / (MODEL_SIZE * 1024)) * 100)
+                    progress = f"Model download: {downloaded_mb:.0f}MB / ~{MODEL_SIZE:.0f}GB ({pct:.1f}%)"
+                else:
+                    progress = f"Model download: {dl_gb} on disk"
+            except (ValueError, AttributeError):
+                progress = f"Model download: {dl_gb} on disk"
+
+            if log_tail and "download" not in log_tail.lower():
+                progress += f"  │  vLLM: {log_tail[:60]}"
+            log(f"  [{elapsed}s / {eta_str}] {progress}")
+        elif log_tail:
+            log(f"  [{elapsed}s / {eta_str}] {log_tail[:80]}")
+        else:
+            log(f"  [{elapsed}s / {eta_str}] Starting model download...")
+
         time.sleep(20)
 
     die(f"vLLM did not become ready within {VLLM_TIMEOUT_S//60} min")

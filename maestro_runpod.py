@@ -265,16 +265,27 @@ def ssh_probe(host: str, port: int) -> bool:
 def wait_for_ports(api_key: str, pod_id: str) -> Dict:
     """Wait until RunPod has mapped SSH ports and the pod is RUNNING."""
     deadline = time.time() + PORTS_TIMEOUT_S
+    start    = time.time()
     attempt  = 0
     while time.time() < deadline:
         attempt += 1
+        elapsed = int(time.time() - start)
         pod = get_pod(api_key, pod_id)
         if pod:
             status  = pod.get("desiredStatus", "")
             runtime = pod.get("runtime") or {}
             ports   = runtime.get("ports") or []
             has_ssh = any(p.get("privatePort") == 22 for p in ports)
-            log(f"  [{attempt}] status={status}  ports={len(ports)}  ssh={has_ssh}")
+            uptime  = runtime.get("uptimeInSeconds", 0)
+
+            if status == "RUNNING" and not has_ssh:
+                # Container up but ports not mapped yet — Docker image likely still pulling
+                log(f"  [{elapsed}s] Container starting, awaiting port map... (Docker pull may still be in progress)")
+            elif status != "RUNNING":
+                log(f"  [{elapsed}s] Pod status={status} — waiting for container (Docker pull ~20GB)...")
+            else:
+                log(f"  [{elapsed}s] status={status}  ports={len(ports)}  ssh={has_ssh}")
+
             event("wait_ports_poll", status=status, ports=len(ports), ssh=has_ssh)
             if status == "RUNNING" and has_ssh:
                 return pod
@@ -306,48 +317,84 @@ def wait_for_ssh(api_key: str, pod_id: str) -> Tuple[str, int]:
 
 
 def wait_for_vllm(pod_id: str, ssh_host: str, ssh_port: int) -> None:
-    """
-    Poll vLLM health. Uses RunPod's HTTPS proxy (no SSH tunnel needed).
-    Falls back to SSH probe if proxy isn't reachable yet.
-    """
     proxy = vllm_proxy_url(pod_id)
-    log(f"Waiting for vLLM (model download + warmup ~15 min)...")
+    log(f"Waiting for vLLM...")
+    log(f"  Phase 1: Model download from HuggingFace (~18GB, ~10-15 min)")
+    log(f"  Phase 2: vLLM warmup (~2-3 min)")
     log(f"  Proxy URL: {proxy}")
-    log(f"  Log:  ssh -i {SSH_KEY} root@{ssh_host} -p {ssh_port} 'tail -f /workspace/logs/vllm.log'")
+    log(f"  Live log: ssh -i {SSH_KEY} root@{ssh_host} -p {ssh_port} 'tail -f /workspace/logs/vllm.log'")
     event("wait_vllm_begin", pod_id=pod_id, proxy=proxy)
 
-    deadline = time.time() + VLLM_TIMEOUT_S
-    attempt  = 0
+    deadline   = time.time() + VLLM_TIMEOUT_S
+    start      = time.time()
+    MODEL_SIZE = 18.0  # AWQ-32B ~18GB
+
     while time.time() < deadline:
-        attempt += 1
-        elapsed = int(time.time() - (deadline - VLLM_TIMEOUT_S))
+        elapsed = int(time.time() - start)
 
         # Try RunPod HTTPS proxy first (no tunnel needed)
         try:
             r = requests.get(f"{proxy}/v1/models", timeout=8)
             if r.status_code == 200:
-                log(f"vLLM ready via proxy! ({elapsed}s)")
+                log(f"✅ vLLM ready via proxy! ({elapsed}s = {elapsed//60}m {elapsed%60}s)")
                 event("vllm_ready", elapsed_s=elapsed)
                 return
         except requests.RequestException:
             pass
 
-        # Fallback: check via SSH
+        # SSH: check vLLM health + model download progress in one call
+        cmd = (
+            "VLLM_OK=$(curl -fsS http://localhost:8000/v1/models 2>/dev/null && echo ok || true); "
+            "DL_GB=$(du -sh /workspace/models 2>/dev/null | awk '{print $1}' || echo 0); "
+            "LOG_TAIL=$(tail -1 /workspace/logs/vllm.log 2>/dev/null || true); "
+            "echo \"VLLM=$VLLM_OK|DL=$DL_GB|LOG=$LOG_TAIL\""
+        )
         probe = subprocess.run(
             ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
              "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "IdentitiesOnly=yes",
-             "-i", str(SSH_KEY), f"root@{ssh_host}", "-p", str(ssh_port),
-             "curl -fsS http://localhost:8000/v1/models 2>/dev/null && echo vllm_ok || "
-             "tail -1 /workspace/logs/vllm.log 2>/dev/null || echo waiting"],
-            capture_output=True, text=True, timeout=15,
+             "-i", str(SSH_KEY), f"root@{ssh_host}", "-p", str(ssh_port), cmd],
+            capture_output=True, text=True, timeout=25,
         )
         out = probe.stdout.strip()
-        if "vllm_ok" in out:
-            log(f"vLLM ready via SSH probe! ({elapsed}s)")
+
+        if "VLLM=ok" in out:
+            log(f"✅ vLLM ready! ({elapsed}s = {elapsed//60}m {elapsed%60}s)")
             event("vllm_ready", elapsed_s=elapsed)
             return
 
-        log(f"  [{elapsed}s] {out or 'waiting...'}")
+        dl_gb = log_tail = ""
+        for part in out.split("|"):
+            if part.startswith("DL="): dl_gb    = part[3:].strip()
+            elif part.startswith("LOG="): log_tail = part[4:].strip()
+
+        eta_remaining = max(0, int((MODEL_SIZE / 18.0) * 750) - elapsed)
+        eta_str = f"~{eta_remaining//60}m remaining" if eta_remaining > 30 else "almost ready..."
+
+        if dl_gb and dl_gb not in ("0", "0B", ""):
+            try:
+                size_str = dl_gb.upper()
+                if "G" in size_str:
+                    downloaded = float(size_str.replace("G","").replace("B","").strip())
+                    pct = min(100, (downloaded / MODEL_SIZE) * 100)
+                    bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+                    progress = f"Model download: {downloaded:.1f}GB / ~{MODEL_SIZE:.0f}GB [{bar}] {pct:.0f}%"
+                elif "M" in size_str:
+                    downloaded_mb = float(size_str.replace("M","").replace("B","").strip())
+                    pct = min(100, (downloaded_mb / (MODEL_SIZE * 1024)) * 100)
+                    progress = f"Model download: {downloaded_mb:.0f}MB / ~{MODEL_SIZE:.0f}GB ({pct:.1f}%)"
+                else:
+                    progress = f"Model download: {dl_gb} on disk"
+            except (ValueError, AttributeError):
+                progress = f"Model download: {dl_gb} on disk"
+
+            if log_tail and "download" not in log_tail.lower():
+                progress += f"  │  {log_tail[:50]}"
+            log(f"  [{elapsed}s / {eta_str}] {progress}")
+        elif log_tail:
+            log(f"  [{elapsed}s / {eta_str}] {log_tail[:80]}")
+        else:
+            log(f"  [{elapsed}s / {eta_str}] Waiting for model download to start...")
+
         time.sleep(20)
 
     die(f"vLLM did not become ready within {VLLM_TIMEOUT_S // 60} min")

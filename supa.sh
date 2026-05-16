@@ -1,21 +1,48 @@
 #!/bin/bash
-# Local launcher — single command to bring up the SupaFantastic control plane.
-# Run this on your laptop; it has nothing to do with the pod.
-set -e
+# SupaFantastic launcher — runs as `sf`
+# =====================================
+# Builds React if needed, opens browser, starts Flask backend.
 
-RUNPOD_DIR="${RUNPOD_DIR:-$HOME/runpod}"
-FRONTEND_DIR="${FRONTEND_DIR:-$HOME/SupaFantasticLLM/app/frontend}"
-APP_PY="${APP_PY:-$RUNPOD_DIR/app.py}"
+set -euo pipefail
 
-# Build the React app if a build doesn't exist yet, so Flask can serve it.
-# Skip if you prefer `npm start` in another terminal.
-if [ -d "$FRONTEND_DIR" ] && [ ! -f "$FRONTEND_DIR/build/index.html" ]; then
-  echo "No React build found; running `npm run build` once..."
-  ( cd "$FRONTEND_DIR" && npm install --silent && npm run build )
+POD_DIR="${HOME}/pod"
+FRONTEND_DIR="${POD_DIR}/SupaFantasticLLM/app/frontend"
+APP="${POD_DIR}/app.py"
+URL="http://localhost:5000"
+
+cd "${POD_DIR}"
+
+# ── Sanity checks ──────────────────────────────────────────────────────────
+if [ ! -f "${APP}" ]; then
+  echo "ERROR: ${APP} not found. Run sf-install.sh first."
+  exit 1
 fi
 
-# Open browser after a short delay so Flask has time to bind.
-( sleep 2 && xdg-open "http://localhost:5000" >/dev/null 2>&1 || \
-              open       "http://localhost:5000" >/dev/null 2>&1 ) &
+# ── Build React if build dir is missing or src is newer ───────────────────
+if [ -d "${FRONTEND_DIR}" ]; then
+  BUILD_DIR="${FRONTEND_DIR}/build"
+  MAIN_SRC="${FRONTEND_DIR}/src/App.js"
 
-exec python3 "$APP_PY"
+  if [ ! -d "${BUILD_DIR}" ]; then
+    echo "==> Building React UI (first time)..."
+    (cd "${FRONTEND_DIR}" && npm install --silent && npm run build)
+  elif [ -f "${MAIN_SRC}" ] && [ "${MAIN_SRC}" -nt "${BUILD_DIR}/index.html" ]; then
+    echo "==> App.js changed — rebuilding..."
+    (cd "${FRONTEND_DIR}" && npm run build)
+  fi
+fi
+
+# ── Open browser ───────────────────────────────────────────────────────────
+open_browser() {
+  if command -v xdg-open &>/dev/null; then
+    xdg-open "${URL}" &
+  elif command -v open &>/dev/null; then
+    open "${URL}" &
+  fi
+}
+
+echo "==> Starting SupaFantastic at ${URL}"
+sleep 1 && open_browser &
+
+# ── Launch Flask ───────────────────────────────────────────────────────────
+exec python3 "${APP}"
