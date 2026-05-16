@@ -1,0 +1,195 @@
+{
+  "timestamp": "2026-05-16T11:30:58.521631",
+  "results": {
+    "US-CA-2": {
+      "name": "US-CA-2",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    },
+    "US-TX-3": {
+      "name": "US-TX-3",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    },
+    "US-KS-2": {
+      "name": "US-KS-2",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    },
+    "EU-RO-1": {
+      "name": "EU-RO-1",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    },
+    "EU-SE-1": {
+      "name": "EU-SE-1",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    },
+    "EU-CZ-1": {
+      "name": "EU-CZ-1",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    },
+    "CA-MTL-1": {
+      "name": "CA-MTL-1",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    },
+    "OC-AU-1": {
+      "name": "OC-AU-1",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    },
+    "AS-JP-1": {
+      "name": "AS-JP-1",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    },
+    "SEA-SG-1": {
+      "name": "SEA-SG-1",
+      "gpu_results": {
+        "NVIDIA GeForce RTX 4090": "?",
+        "NVIDIA GeForce RTX 5090": "?",
+        "NVIDIA RTX PRO 4500 Blackwell": "?",
+        "NVIDIA A40": "?",
+        "NVIDIA L40": "?",
+        "NVIDIA L40S": "?",
+        "NVIDIA L4": "?",
+        "NVIDIA GeForce RTX 3090": "?",
+        "NVIDIA GeForce RTX 3090 Ti": "?",
+        "NVIDIA RTX A5000": "?",
+        "NVIDIA RTX A6000": "?",
+        "NVIDIA RTX 6000 Ada Generation": "?",
+        "NVIDIA RTX 5000 Ada Generation": "?"
+      },
+      "score": 0
+    }
+  }
+}
