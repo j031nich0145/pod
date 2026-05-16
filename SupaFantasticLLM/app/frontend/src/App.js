@@ -690,50 +690,176 @@ function InlineSSHTerminal() {
   useEffect(() => {
     if (!containerRef.current) return;
     let term, ws;
-    Promise.all([
-      import("@xterm/xterm"),
-      import("@xterm/addon-attach"),
-      import("@xterm/xterm/css/xterm.css"),
-    ]).then(([{ Terminal }, { AttachAddon }]) => {
-      term = new Terminal({
-        cursorBlink: true, fontSize: 12,
-        fontFamily: "'Fira Code','Cascadia Code','Courier New',monospace",
-        theme: {
-          background: "#0d1117", foreground: "#e6edf3", cursor: "#58a6ff",
-          black: "#0d1117", red: "#ff7b72", green: "#3fb950",
-          yellow: "#d29922", blue: "#58a6ff", magenta: "#bc8cff",
-          cyan: "#39c5cf", white: "#b1bac4",
-        },
-        scrollback: 2000,
-      });
+
+    const init = () => {
       const el = containerRef.current;
-      term.open(el);
-      term.write("\r\n  " + String.fromCharCode(27) + "[36mConnecting to pod SSH..." + String.fromCharCode(27) + "[0m\r\n\r\n");
-      const cols = Math.max(40, Math.floor((el.clientWidth - 24) / 7.2));
-      const rows = Math.max(8,  Math.floor((el.clientHeight - 16) / 17));
-      term.resize(cols, rows);
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      ws = new WebSocket(`${proto}//localhost:5000/ssh/terminal`);
-      ws.binaryType = "arraybuffer";
-      ws.onopen  = () => { term.loadAddon(new AttachAddon(ws)); };
-      ws.onerror = () => term.write("\r\n  " + String.fromCharCode(27) + "[31m[connection error]" + String.fromCharCode(27) + "[0m\r\n");
-      ws.onclose = () => term.write("\r\n  " + String.fromCharCode(27) + "[33m[disconnected]" + String.fromCharCode(27) + "[0m\r\n");
-      termRef.current = { term, ws };
-    }).catch(e => console.error("xterm load failed:", e));
+      if (!el) return;
+
+      Promise.all([
+        import("@xterm/xterm"),
+        import("@xterm/addon-attach"),
+        import("@xterm/xterm/css/xterm.css"),
+      ]).then(([{ Terminal }, { AttachAddon }]) => {
+        const charW = 7.8;
+        const charH = 17;
+        const cols  = Math.max(40, Math.floor((el.clientWidth  - 20) / charW));
+        const rows  = Math.max(10, Math.floor((el.clientHeight - 10) / charH));
+
+        term = new Terminal({
+          cursorBlink: true, fontSize: 13,
+          fontFamily: "'Fira Code','Cascadia Code','Courier New',monospace",
+          cols, rows,
+          scrollback: 5000,
+          wordWrap: false,   // terminal wraps at cols boundary naturally
+          theme: {
+            background: "#0d1117", foreground: "#e6edf3", cursor: "#58a6ff",
+            black: "#0d1117", red: "#ff7b72", green: "#3fb950",
+            yellow: "#d29922", blue: "#58a6ff", magenta: "#bc8cff",
+            cyan: "#39c5cf", white: "#b1bac4",
+          },
+        });
+
+        term.open(el);
+        term.write("\r\n  " + String.fromCharCode(27) + "[36mConnecting to pod SSH..." + String.fromCharCode(27) + "[0m\r\n\r\n");
+
+        const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(`${proto}//localhost:5000/ssh/terminal`);
+        ws.binaryType = "arraybuffer";
+        ws.onopen  = () => { term.loadAddon(new AttachAddon(ws)); };
+        ws.onerror = () => term.write("\r\n  " + String.fromCharCode(27) + "[31m[connection error]" + String.fromCharCode(27) + "[0m\r\n");
+        ws.onclose = () => term.write("\r\n  " + String.fromCharCode(27) + "[33m[disconnected]" + String.fromCharCode(27) + "[0m\r\n");
+        termRef.current = { term, ws };
+
+        // Resize terminal when container size changes
+        const ro = new ResizeObserver(() => {
+          if (!termRef.current?.term || !el) return;
+          const newCols = Math.max(40, Math.floor((el.clientWidth  - 20) / charW));
+          const newRows = Math.max(10, Math.floor((el.clientHeight - 10) / charH));
+          try { termRef.current.term.resize(newCols, newRows); } catch {}
+        });
+        ro.observe(el);
+        termRef.current.ro = ro;
+
+      }).catch(e => console.error("xterm load failed:", e));
+    };
+
+    // Defer slightly so container has real dimensions
+    const t = setTimeout(init, 50);
 
     return () => {
+      clearTimeout(t);
+      try { termRef.current?.ro?.disconnect(); } catch {}
       try { termRef.current?.ws?.close(); } catch {}
       try { termRef.current?.term?.dispose(); } catch {}
     };
   }, []);
 
-  return <div ref={containerRef} style={{ flex: 1, background: "#0d1117", overflow: "hidden", padding: "8px 12px" }} />;
+  return <div ref={containerRef} style={{ flex: 1, background: "#0d1117", overflow: "hidden", minHeight: 0 }} />;
+}
+
+
+// ─────────────────────────────────────
+// BILLING OVERVIEW
+// ─────────────────────────────────────
+function BillingOverview({ onStop }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = () => {
+    setLoading(true);
+    fetch("http://localhost:5000/billing/overview")
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const fmtUptime = s => {
+    if (!s) return "—";
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  const stop = (provider, id) => {
+    const url = provider === "vast"
+      ? `http://localhost:5000/vastai/terminate`
+      : `http://localhost:5000/runpod/terminate`;
+    fetch(url, { method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ instance_id: id, pod_id: id }) })
+      .then(() => setTimeout(load, 1000));
+  };
+
+  const vast   = data?.vast   || [];
+  const runpod = data?.runpod || [];
+  const all    = [...vast.map(i => ({...i, provider:"vast"})),
+                  ...runpod.map(i => ({...i, provider:"runpod"}))];
+
+  if (loading) return (
+    <div style={{ padding: "8px 0", fontSize: "11px", color: "var(--color-text-muted)" }}>
+      Checking running instances...
+    </div>
+  );
+
+  if (all.length === 0) return null;
+
+  const totalCost = all.reduce((s, i) => s + (i.cost || 0), 0);
+
+  return (
+    <div style={{
+      marginBottom: "12px", borderRadius: "6px", overflow: "hidden",
+      border: "1px solid var(--color-border)",
+    }}>
+      <div style={{
+        padding: "6px 10px", background: "var(--color-surface)",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}>
+        <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--color-text)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          💸 Running Instances
+        </span>
+        <span style={{ fontSize: "11px", color: totalCost > 0.5 ? "#f87171" : "var(--color-text-muted)" }}>
+          ${totalCost.toFixed(3)} so far · ${all.reduce((s,i) => s+(i.price||0),0).toFixed(3)}/hr
+        </span>
+      </div>
+      {all.map(inst => (
+        <div key={`${inst.provider}-${inst.id}`} style={{
+          padding: "6px 10px", borderTop: "1px solid var(--color-border)",
+          display: "flex", alignItems: "center", gap: "8px",
+          background: inst.status === "running" ? "transparent" : "rgba(248,113,113,0.05)",
+        }}>
+          <span style={{ fontSize: "10px", opacity: 0.6 }}>
+            {inst.provider === "vast" ? "🌐" : "⚡"}
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "11px", color: "var(--color-text)", fontFamily: "var(--font-family-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {inst.gpu || inst.name || inst.id}
+              <span style={{ marginLeft: "6px", opacity: 0.5 }}>#{String(inst.id).slice(-6)}</span>
+            </div>
+            <div style={{ fontSize: "10px", color: "var(--color-text-muted)" }}>
+              {inst.status} · {fmtUptime(inst.uptime_s)} · ${inst.price}/hr · spent ${inst.cost?.toFixed(3)}
+            </div>
+          </div>
+          <button
+            onClick={() => stop(inst.provider, inst.id)}
+            style={{
+              padding: "2px 7px", borderRadius: "4px", fontSize: "10px", fontWeight: 700,
+              border: "1px solid var(--color-danger,#f87171)", background: "transparent",
+              color: "var(--color-danger,#f87171)", cursor: "pointer", flexShrink: 0,
+              fontFamily: "var(--font-family)",
+            }}
+          >
+            Kill
+          </button>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // ─────────────────────────────────────
 // MODES PANEL
 // ─────────────────────────────────────
-function ModesPanel({ config, onChange, onClose, onStart, onStop, loading, startLogs, models, selectedModel, onSelectModel, elapsedSecs }) {
+function ModesPanel({ isOpen, config, onChange, onClose, onStart, onStop, loading, startLogs, models, selectedModel, onSelectModel, elapsedSecs }) {
   const panelRef        = useRef();
   const logContainerRef = useRef();
   const [podInfo, setPodInfo]             = useState(null);
@@ -772,12 +898,15 @@ function ModesPanel({ config, onChange, onClose, onStart, onStop, loading, start
     poll(); const id = setInterval(poll, 8000); return () => clearInterval(id);
   }, []);
 
-  // Outside click — only when in config view
+  // Outside click — collapse when clicking outside in config view
   useEffect(() => {
-    const handler = e => { if (!termView && panelRef.current && !panelRef.current.contains(e.target)) onClose(); };
+    const handler = e => {
+      if (!isOpen) return;
+      if (!termView && panelRef.current && !panelRef.current.contains(e.target)) onClose();
+    };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [onClose, termView]);
+  }, [onClose, termView, isOpen]);
 
   // Auto-scroll log — only when user is at/near the bottom
   useEffect(() => {
@@ -948,6 +1077,9 @@ function ModesPanel({ config, onChange, onClose, onStart, onStop, loading, start
       display: "flex", flexDirection: "column",
       fontFamily: "var(--font-family)",
       userSelect: isPanelResizing ? "none" : "auto",
+      transform: isOpen ? "translateX(0)" : "translateX(100%)",
+      transition: "transform 0.2s ease",
+      visibility: isOpen ? "visible" : "hidden",
     }}>
       {/* Resize handle */}
       <div onMouseDown={() => setIsPanelResizing(true)} style={{
@@ -1002,6 +1134,7 @@ function ModesPanel({ config, onChange, onClose, onStart, onStop, loading, start
 
           {/* Config body */}
           <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: "2px" }}>
+            <BillingOverview />
             <div style={{ fontSize: "11px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--color-text-muted)", marginBottom: "6px" }}>Backend</div>
 
             {/* Enable toggle + terminal-view button on same row */}
@@ -2140,22 +2273,21 @@ export default function App() {
         </div>
       )}
 
-      {/* MODES PANEL */}
-      {modesOpen && (
-        <ModesPanel
-          config={runpodConfig}
-          onChange={setRunpodConfig}
-          onClose={() => setModesOpen(false)}
-          onStart={handleStartPod}
-          onStop={handleStopPod}
-          loading={runpodLoading}
-          startLogs={startLogs}
-          models={models}
-          selectedModel={selectedModel}
-          onSelectModel={setSelectedModel}
-          elapsedSecs={elapsedSecs}
-        />
-      )}
+      {/* MODES PANEL — always mounted so state survives collapse */}
+      <ModesPanel
+        isOpen={modesOpen}
+        config={runpodConfig}
+        onChange={setRunpodConfig}
+        onClose={() => setModesOpen(false)}
+        onStart={handleStartPod}
+        onStop={handleStopPod}
+        loading={runpodLoading}
+        startLogs={startLogs}
+        models={models}
+        selectedModel={selectedModel}
+        onSelectModel={setSelectedModel}
+        elapsedSecs={elapsedSecs}
+      />
     </div>
   );
 }

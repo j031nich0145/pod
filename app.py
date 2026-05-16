@@ -992,7 +992,85 @@ def vastai_tunnel():
     return jsonify({"success": alive, "local_port": VAST_LOCAL_PORT})
 
 
-@app.route("/debug/tunnel", methods=["GET"])
+@app.route("/billing/overview", methods=["GET"])
+def billing_overview():
+    """
+    Lists ALL running/loading instances across both providers with cost info.
+    Shown in the Modes panel on boot so user can see what's costing money.
+    """
+    env        = load_config()
+    vast_key   = env.get("VAST_API_KEY",   "").strip()
+    runpod_key = env.get("RUNPOD_API_KEY", "").strip()
+    result: Dict[str, Any] = {"vast": [], "runpod": [], "error": None}
+
+    # ── Vast.ai ───────────────────────────────────────────────────
+    if vast_key:
+        try:
+            r = requests.get(
+                "https://console.vast.ai/api/v0/instances/",
+                headers={"Authorization": f"Bearer {vast_key}"},
+                params={"owner": "me"}, timeout=10,
+            )
+            if r.ok:
+                for inst in r.json().get("instances", []):
+                    status = inst.get("actual_status", "")
+                    if status not in ("running", "loading", "exited"):
+                        continue
+                    price     = inst.get("dph_total") or 0
+                    uptime_s  = inst.get("duration") or 0  # seconds running
+                    cost_so_far = round(price * uptime_s / 3600, 4) if uptime_s else 0
+                    result["vast"].append({
+                        "id":       inst.get("id"),
+                        "label":    inst.get("label", ""),
+                        "gpu":      inst.get("gpu_name", "?"),
+                        "status":   status,
+                        "price":    round(price, 4),
+                        "uptime_s": int(uptime_s),
+                        "cost":     cost_so_far,
+                        "ssh_host": inst.get("ssh_host", ""),
+                        "ssh_port": inst.get("ssh_port", ""),
+                    })
+        except Exception as e:
+            result["error"] = str(e)
+
+    # ── RunPod ────────────────────────────────────────────────────
+    if runpod_key:
+        try:
+            query = """query {
+              myself {
+                pods {
+                  id name desiredStatus
+                  costPerHr
+                  runtime { uptimeInSeconds }
+                  machine { podHostId }
+                  gpuCount
+                }
+              }
+            }"""
+            r = requests.post(
+                f"https://api.runpod.io/graphql?api_key={runpod_key}",
+                json={"query": query}, timeout=10,
+            )
+            if r.ok:
+                pods = (r.json().get("data") or {}).get("myself", {}).get("pods") or []
+                for pod in pods:
+                    status  = pod.get("desiredStatus", "")
+                    uptime  = (pod.get("runtime") or {}).get("uptimeInSeconds", 0)
+                    price   = pod.get("costPerHr") or 0
+                    cost    = round(price * uptime / 3600, 4) if uptime else 0
+                    result["runpod"].append({
+                        "id":       pod.get("id"),
+                        "name":     pod.get("name", ""),
+                        "status":   status,
+                        "price":    round(price, 4),
+                        "uptime_s": int(uptime),
+                        "cost":     cost,
+                        "gpus":     pod.get("gpuCount", 1),
+                    })
+        except Exception as e:
+            result["error"] = (result["error"] or "") + f" RunPod: {e}"
+
+    return jsonify(result)
 def debug_tunnel():
     """Show tunnel status and config — for diagnosing connectivity issues."""
     env = load_config()
