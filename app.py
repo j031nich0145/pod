@@ -221,6 +221,16 @@ def chat():
         messages.append({"role": "user", "content": prompt})
 
     base = llm_url()
+
+    # Auto-heal: if Vast.ai provider but tunnel is dead, restart it
+    _cfg = load_config()
+    if _cfg.get("PROVIDER", "").strip() == "vast":
+        tunnel_alive = _vast_tunnel_proc is not None and _vast_tunnel_proc.poll() is None
+        if not tunnel_alive:
+            app.logger.info("[chat] Vast.ai tunnel dead — restarting...")
+            _start_vast_tunnel()
+            time.sleep(2)
+
     try:
         response = requests.post(
             f"{base}/v1/chat/completions",
@@ -735,17 +745,23 @@ if _FLASK_SOCK and _PARAMIKO:
     @sock.route("/ssh/terminal")
     def ssh_terminal(ws):
         """
-        WebSocket → SSH proxy. Browser connects with xterm.js AttachAddon;
-        keystrokes go pod → browser as raw terminal output. Requires paramiko
-        and flask-sock: pip install paramiko flask-sock
+        WebSocket → SSH proxy. Provider-aware: reads VAST_SSH_HOST for Vast.ai,
+        SSH_HOST for RunPod. Requires paramiko + flask-sock.
         """
-        env = load_config()
-        ssh_host = env.get("SSH_HOST", "").strip()
-        ssh_port_str = env.get("SSH_PORT", "22").strip()
-        ssh_key_path = env.get("SSH_KEY", str(Path.home() / ".ssh" / "pod_key")).strip()
+        env      = load_config()
+        provider = env.get("PROVIDER", "").strip()
+
+        if provider == "vast":
+            ssh_host     = env.get("VAST_SSH_HOST", "").strip()
+            ssh_port_str = env.get("VAST_SSH_PORT", "22").strip()
+        else:
+            ssh_host     = env.get("SSH_HOST", "").strip()
+            ssh_port_str = env.get("SSH_PORT", "22").strip()
+
+        ssh_key_path = str(Path.home() / ".ssh" / "pod_key")
 
         if not ssh_host:
-            ws.send("\r\n[ERROR] No SSH host in config. Start the pod first.\r\n")
+            ws.send(f"\r\n[ERROR] No SSH host in config for provider='{provider or 'runpod'}'. Start the backend first.\r\n")
             return
 
         try:
@@ -827,12 +843,14 @@ def _start_vast_tunnel() -> None:
     """Open an SSH tunnel: local:VAST_LOCAL_PORT → remote:8000."""
     global _vast_tunnel_proc
     _stop_vast_tunnel()
-    env = load_config()
+    env  = load_config()
     host = env.get("VAST_SSH_HOST", "").strip()
     port = env.get("VAST_SSH_PORT", "22").strip()
-    key  = env.get("SSH_KEY", str(Path.home() / ".ssh" / "pod_key")).strip()
-    if not host:
+    key  = str(Path.home() / ".ssh" / "pod_key")
+    if not host or not port:
+        app.logger.warning(f"[tunnel] Missing VAST_SSH_HOST or VAST_SSH_PORT in config")
         return
+    app.logger.info(f"[tunnel] Starting: localhost:{VAST_LOCAL_PORT} → {host}:{port}")
     _vast_tunnel_proc = subprocess.Popen(
         [
             "ssh", "-N", "-L", f"{VAST_LOCAL_PORT}:localhost:8000",
@@ -840,6 +858,7 @@ def _start_vast_tunnel() -> None:
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ServerAliveInterval=30",
             "-o", "IdentitiesOnly=yes",
+            "-o", "ConnectTimeout=15",
             "-i", key, f"root@{host}", "-p", port,
         ],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -971,6 +990,126 @@ def vastai_tunnel():
     _start_vast_tunnel()
     alive = _vast_tunnel_proc is not None and _vast_tunnel_proc.poll() is None
     return jsonify({"success": alive, "local_port": VAST_LOCAL_PORT})
+
+
+@app.route("/debug/tunnel", methods=["GET"])
+def debug_tunnel():
+    """Show tunnel status and config — for diagnosing connectivity issues."""
+    env = load_config()
+    alive = _vast_tunnel_proc is not None and _vast_tunnel_proc.poll() is None
+    key_path = str(Path.home() / ".ssh" / "pod_key")
+    return jsonify({
+        "provider":      env.get("PROVIDER", ""),
+        "vast_ssh_host": env.get("VAST_SSH_HOST", ""),
+        "vast_ssh_port": env.get("VAST_SSH_PORT", ""),
+        "tunnel_alive":  alive,
+        "tunnel_port":   VAST_LOCAL_PORT,
+        "llm_url":       llm_url(),
+        "key_exists":    Path(key_path).exists(),
+        "key_path":      key_path,
+    })
+
+
+@app.route("/backend/status", methods=["GET"])
+def backend_status():
+    """
+    Unified status check — reads config and queries whichever provider was last active.
+    Called on UI startup to detect already-running instances from previous sessions.
+    """
+    env      = load_config()
+    provider = env.get("PROVIDER", "").strip()
+    model    = env.get("ACTIVE_MODEL", "qwen-coder")
+
+    result: Dict[str, Any] = {
+        "provider":    provider or "runpod",
+        "running":     False,
+        "job_running": False,
+        "job_id":      None,
+        "instance_id": "",
+        "ssh_host":    "",
+        "ssh_port":    "",
+        "active_model": model,
+        "uptime":      "",
+    }
+
+    # Is there an active maestro job right now?
+    with _jobs_lock:
+        if _active_job_id and _active_job_id in _jobs:
+            job = _jobs[_active_job_id]
+            if job.returncode is None and job.finished_at is None:
+                result["job_running"] = True
+                result["job_id"]      = _active_job_id
+                result["provider"]    = "vast" if "vast" in _active_job_id else "runpod"
+
+    # Check provider-specific instance
+    if provider == "vast":
+        iid      = env.get("VAST_INSTANCE_ID", "").strip()
+        ssh_host = env.get("VAST_SSH_HOST", "").strip()
+        ssh_port = env.get("VAST_SSH_PORT", "").strip()
+        api_key  = env.get("VAST_API_KEY", "").strip()
+
+        if iid:
+            result.update({"instance_id": iid, "ssh_host": ssh_host, "ssh_port": ssh_port})
+            if api_key:
+                try:
+                    r = requests.get(
+                        f"https://console.vast.ai/api/v0/instances/{iid}/",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        params={"owner": "me"},
+                        timeout=8,
+                    )
+                    if r.ok:
+                        instances = r.json().get("instances", [])
+                        inst = next((i for i in instances if str(i.get("id")) == iid), None)
+                        if inst:
+                            status = inst.get("actual_status", "")
+                            result["running"] = status == "running"
+                            result["instance_status"] = status
+                    # fallback: assume running if we have SSH info
+                    if not result["running"] and ssh_host:
+                        result["running"] = True
+                except Exception:
+                    result["running"] = bool(ssh_host and ssh_port)
+
+        # Auto-start SSH tunnel if Vast.ai is running and tunnel is dead
+        if result["running"] and provider == "vast":
+            tunnel_alive = _vast_tunnel_proc is not None and _vast_tunnel_proc.poll() is None
+            if not tunnel_alive:
+                _start_vast_tunnel()
+                result["tunnel_started"] = True
+
+    elif provider == "runpod" or not provider:
+        pod_id   = env.get("POD_ID", "").strip()
+        ssh_host = env.get("SSH_HOST", "").strip()
+        ssh_port = env.get("SSH_PORT", "").strip()
+        api_key  = env.get("RUNPOD_API_KEY", "").strip()
+        result["provider"] = "runpod"
+
+        if pod_id:
+            result.update({"instance_id": pod_id, "ssh_host": ssh_host, "ssh_port": ssh_port})
+            if api_key:
+                try:
+                    query = f'''query {{
+                      pod(input: {{podId: "{pod_id}"}}) {{
+                        desiredStatus
+                        runtime {{ uptimeInSeconds }}
+                      }}
+                    }}'''
+                    r = requests.post(
+                        f"https://api.runpod.io/graphql?api_key={api_key}",
+                        json={"query": query}, timeout=8,
+                    )
+                    if r.ok:
+                        pod = (r.json().get("data") or {}).get("pod") or {}
+                        result["running"] = pod.get("desiredStatus") == "RUNNING"
+                        uptime_s = (pod.get("runtime") or {}).get("uptimeInSeconds", 0)
+                        if uptime_s:
+                            h, m, s = uptime_s // 3600, (uptime_s % 3600) // 60, uptime_s % 60
+                            result["uptime"] = f"{h}h {m}m" if h else f"{m}m {s}s"
+                except Exception:
+                    result["running"] = bool(ssh_host and ssh_port)
+
+    return jsonify(result)
 
 
 # ─────────────────────────────────────

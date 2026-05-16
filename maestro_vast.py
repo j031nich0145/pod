@@ -136,6 +136,36 @@ def get_my_instances(key: str) -> List[Dict]:
 def get_instance(key: str, iid: int) -> Optional[Dict]:
     return next((i for i in get_my_instances(key) if i["id"] == iid), None)
 
+def find_existing_instance(key: str, served_name: str) -> Optional[Dict]:
+    """Find a usable existing instance with our label."""
+    try:
+        for inst in get_my_instances(key):
+            label  = inst.get("label", "") or ""
+            status = inst.get("actual_status", "")
+            if f"supafantastic-{served_name}" in label and status in ("running", "loading"):
+                return inst
+    except Exception:
+        pass
+    return None
+
+
+def cleanup_dead_instances(key: str) -> None:
+    """Terminate any of our instances that are in a dead/error state."""
+    dead_statuses = {"exited", "stopped", "error", "inactive", "failing"}
+    try:
+        for inst in get_my_instances(key):
+            label  = inst.get("label", "") or ""
+            status = inst.get("actual_status", "")
+            if "supafantastic" in label and status in dead_statuses:
+                log(f"  🧹 Cleaning up dead instance {inst['id']} [{status}]...")
+                try:
+                    destroy_instance(key, inst["id"])
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def destroy_instance(key: str, iid: int) -> None:
     try: vast_delete(key, f"/instances/{iid}/")
     except Exception as e: log(f"  (destroy warning: {e})")
@@ -205,7 +235,9 @@ def wait_for_ssh(key: str, iid: int) -> Tuple[str, int]:
             # Vast.ai reports the Docker/CDI error in status_msg immediately.
             # Don't wait 5 minutes — bail as soon as we see the error text.
             status_msg = inst.get("status_msg", "") or ""
-            CDI_SIGNALS = ("CDI", "OCI runtime", "unresolvable", "failed to create", "failed to start containers")
+            CDI_SIGNALS = ("CDI", "OCI runtime", "unresolvable", "failed to create",
+                           "failed to start containers", "failed to set up container networking",
+                           "driver failed programming")
             if any(sig.lower() in status_msg.lower() for sig in CDI_SIGNALS):
                 log(f"  ✗ Bad host detected immediately — CDI/GPU error:")
                 log(f"    {status_msg[:120]}")
@@ -366,6 +398,45 @@ def cmd_start(env: Dict, model: str, json_events: bool = False) -> None:
     log()
     event("start_begin", model=model)
 
+    # ── Step 1: Clean up dead instances ──────────────────────────
+    log("Checking for existing instances...")
+    cleanup_dead_instances(api_key)
+
+    # ── Step 2: Reuse existing running/loading instance ───────────
+    existing = find_existing_instance(api_key, model_cfg["served_name"])
+    if existing:
+        _iid     = existing["id"]
+        status   = existing.get("actual_status", "")
+        ssh_host = existing.get("ssh_host", "") or ""
+        ssh_port = int(existing.get("ssh_port") or 22)
+        log(f"✓ Found existing instance {_iid} [{status}] — reusing it")
+        event("existing_instance", instance_id=_iid, status=status)
+
+        env["VAST_INSTANCE_ID"] = str(_iid)
+        env["ACTIVE_MODEL"]     = model
+        env["PROVIDER"]         = "vast"
+        save_env(env)
+
+        if status == "loading":
+            log("  Instance is pulling Docker image — waiting for SSH...")
+        log("Waiting for SSH...")
+        event("wait_ssh", instance_id=_iid)
+        ssh_host, ssh_port = wait_for_ssh(api_key, _iid)
+        if not ssh_host:
+            log("  Existing instance failed — searching for a new one...")
+        else:
+            log(f"SSH ready: {ssh_host}:{ssh_port}")
+            event("ssh_ready", host=ssh_host, port=ssh_port)
+            env["VAST_SSH_HOST"] = ssh_host
+            env["VAST_SSH_PORT"] = str(ssh_port)
+            save_env(env)
+            log()
+            event("stack_begin", instance_id=_iid)
+            wait_for_vllm(ssh_host, ssh_port, _iid)
+            _finish(env, str(_iid), ssh_host, ssh_port, model, model_cfg)
+            return
+
+    # ── Step 3: Search for new offer ─────────────────────────────
     log("Searching for available GPUs...")
     offers = search_offers(api_key)
     if not offers: die("No offers found. Try again in a few minutes.")
@@ -437,10 +508,13 @@ def cmd_start(env: Dict, model: str, json_events: bool = False) -> None:
     log()
     event("stack_begin", instance_id=iid)
     wait_for_vllm(ssh_host, ssh_port, iid)
+    _finish(env, str(iid), ssh_host, ssh_port, model, model_cfg)
 
+
+def _finish(env: Dict, iid: str, ssh_host: str, ssh_port: int,
+            model: str, model_cfg: Dict) -> None:
     env["VAST_VLLM_URL"] = "http://localhost:8001"
     save_env(env)
-
     log()
     log("╔══════════════════════════════════════════╗")
     log("║  ✅ SupaFantastic ready (Vast.ai)        ║")

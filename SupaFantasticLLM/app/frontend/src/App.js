@@ -734,8 +734,8 @@ function InlineSSHTerminal() {
 // MODES PANEL
 // ─────────────────────────────────────
 function ModesPanel({ config, onChange, onClose, onStart, onStop, loading, startLogs, models, selectedModel, onSelectModel, elapsedSecs }) {
-  const panelRef   = useRef();
-  const logsEndRef = useRef();
+  const panelRef        = useRef();
+  const logContainerRef = useRef();
   const [podInfo, setPodInfo]             = useState(null);
   const [panelWidth, setPanelWidth]       = useState(340);
   const [isPanelResizing, setIsPanelResizing] = useState(false);
@@ -779,8 +779,13 @@ function ModesPanel({ config, onChange, onClose, onStart, onStop, loading, start
     return () => document.removeEventListener("mousedown", handler);
   }, [onClose, termView]);
 
-  // Auto-scroll log
-  useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [startLogs]);
+  // Auto-scroll log — only when user is at/near the bottom
+  useEffect(() => {
+    const el = logContainerRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [startLogs]);
 
   const set = (key, val) => onChange({ ...config, [key]: val });
   const isRunning = config.podRunning;
@@ -902,7 +907,7 @@ function ModesPanel({ config, onChange, onClose, onStart, onStop, loading, start
 
       {/* Log tab */}
       {activeTab === "log" && (
-        <div style={{ flex: 1, overflowY: "auto", padding: "8px 12px", background: "var(--color-code,#0d1117)" }}>
+        <div ref={logContainerRef} style={{ flex: 1, overflowY: "auto", padding: "8px 12px", background: "var(--color-code,#0d1117)" }}>
           {startLogs.length === 0 ? (
             <div style={{ fontSize: "11px", color: "var(--color-text-subtle)", fontFamily: "var(--font-family-mono)", padding: "8px 0" }}>
               No logs yet. Click Start to begin.
@@ -918,7 +923,6 @@ function ModesPanel({ config, onChange, onClose, onStart, onStop, loading, start
                    : "var(--color-text-muted)",
             }}>{line}</div>
           ))}
-          <div ref={logsEndRef} />
         </div>
       )}
 
@@ -975,7 +979,7 @@ function ModesPanel({ config, onChange, onClose, onStart, onStop, loading, start
             <button onClick={onClose} style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--color-text-muted)", fontSize: "16px", padding: "2px 4px" }}>×</button>
           </div>
           {/* Full-height tabs */}
-          <TabContent />
+          {TabContent()}
         </>
       )}
 
@@ -1347,30 +1351,28 @@ export default function App() {
       const s = secs % 60;
       return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
     };
-    fetch("http://localhost:5000/runpod/config")
+    fetch("http://localhost:5000/backend/status")
       .then((r) => r.json())
       .then((d) => {
-        const cfg = d.config || {};
-        if (!cfg.POD_ID) return;
-        return fetch("http://localhost:5000/runpod/status")
-          .then((r) => r.json())
-          .then((s) => {
-            const running = s.running === true;
-            const uptime = s.pod?.runtime?.uptimeInSeconds;
-            setRunpodConfig((prev) => ({
-              ...prev,
-              enabled: prev.enabled || running,
-              podId: cfg.POD_ID || prev.podId,
-              podRunning: running,
-            }));
-            if (running) {
-              setStartLogs([
-                `⚡ Pod already running  [${cfg.POD_ID}]`,
-                uptime ? `⏱ Uptime: ${fmtUp(uptime)}` : "",
-                cfg.SSH_HOST ? `✓  SSH  ${cfg.SSH_HOST}:${cfg.SSH_PORT}` : "",
-              ].filter(Boolean));
-            }
-          });
+        if (!d.running && !d.job_running) return;
+        const provider = d.provider || "runpod";
+        setRunpodConfig((prev) => ({
+          ...prev,
+          enabled: true,
+          provider,
+          podRunning: d.running,
+        }));
+        const lines = [];
+        const label = provider === "vast" ? "🌐 Vast.ai" : "⚡ RunPod";
+        if (d.job_running) {
+          lines.push(`${label} job is in progress — reconnect or wait for it to finish`);
+        } else if (d.running) {
+          lines.push(`${label} instance already running  [${d.instance_id}]`);
+          if (d.uptime) lines.push(`⏱ Uptime: ${d.uptime}`);
+          if (d.ssh_host) lines.push(`✓  SSH  ${d.ssh_host}:${d.ssh_port}`);
+          lines.push(`✅ Ready — switch to Vast.ai tab to chat or open SSH`);
+        }
+        setStartLogs(lines.filter(Boolean));
       })
       .catch(() => {});
   }, []); // eslint-disable-line
