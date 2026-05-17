@@ -992,6 +992,116 @@ def vastai_tunnel():
     return jsonify({"success": alive, "local_port": VAST_LOCAL_PORT})
 
 
+
+@app.route("/scout", methods=["GET"])
+@app.route("/scout/hosts", methods=["GET"])
+def scout_hosts():
+    """Scans RunPod + Vast.ai GPU availability, sorted by proximity to user."""
+    env        = load_config()
+    runpod_key = env.get("RUNPOD_API_KEY", "").strip()
+    vast_key   = env.get("VAST_API_KEY",   "").strip()
+    result: Dict[str, Any] = {"runpod": [], "vast": [], "user_location": None}
+
+    # Detect user location for proximity sort
+    user_lat, user_lon = 49.28, -123.12  # default: Vancouver
+    try:
+        geo = requests.get("https://ipapi.co/json/", timeout=4).json()
+        user_lat = float(geo.get("latitude",  user_lat))
+        user_lon = float(geo.get("longitude", user_lon))
+        result["user_location"] = f"{geo.get('city','')}, {geo.get('country_name','')}"
+    except Exception:
+        result["user_location"] = "Vancouver, CA (default)"
+
+    def haversine(lat1, lon1, lat2, lon2) -> float:
+        import math
+        R = 6371
+        dlat, dlon = math.radians(lat2-lat1), math.radians(lon2-lon1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
+        return R * 2 * math.asin(math.sqrt(a))
+
+    RUNPOD_TARGETS = {
+        "NVIDIA RTX A5000","NVIDIA GeForce RTX 3090","NVIDIA GeForce RTX 3090 Ti",
+        "NVIDIA GeForce RTX 4090","NVIDIA L4","NVIDIA RTX PRO 4500 Blackwell",
+        "NVIDIA RTX 5000 Ada Generation","NVIDIA GeForce RTX 5090",
+        "NVIDIA RTX A6000","NVIDIA A40","NVIDIA L40","NVIDIA L40S",
+        "NVIDIA RTX 6000 Ada Generation",
+    }
+
+    # RunPod — global availability per GPU type
+    if runpod_key:
+        try:
+            q = """query { gpuTypes {
+              id displayName memoryInGb
+              maxGpuCountCommunityCloud communityPrice
+            }}"""
+            r = requests.post(f"https://api.runpod.io/graphql?api_key={runpod_key}",
+                              json={"query": q}, timeout=10)
+            if r.ok:
+                for gpu in (r.json().get("data") or {}).get("gpuTypes", []):
+                    if gpu.get("id") not in RUNPOD_TARGETS: continue
+                    count = gpu.get("maxGpuCountCommunityCloud") or 0
+                    price = gpu.get("communityPrice") or 0
+                    if count > 0:
+                        result["runpod"].append({
+                            "gpu":   gpu.get("displayName", gpu["id"]),
+                            "vram":  gpu.get("memoryInGb", 0),
+                            "count": count,
+                            "price": round(price, 3),
+                        })
+            result["runpod"].sort(key=lambda x: x["price"])
+        except Exception as e:
+            result["runpod_error"] = str(e)
+
+    # Vast.ai — grouped by country, sorted by distance
+    LOC_COORDS = {
+        "CA":(56.1,-106.3),"US":(37.1,-95.7),"DE":(51.2,10.5),"FR":(46.2,2.2),
+        "GB":(55.4,-3.4),"NL":(52.1,5.3),"SE":(60.1,18.6),"FI":(61.9,25.7),
+        "PL":(52.0,20.0),"RO":(45.9,24.9),"CZ":(49.8,15.5),"NO":(60.5,8.5),
+        "CN":(35.9,104.2),"JP":(36.2,138.3),"KR":(35.9,127.8),"SG":(1.3,103.8),
+        "IN":(20.6,78.9),"AU":(-25.3,133.8),"BR":(-14.2,-51.9),"ZA":(-28.5,24.7),
+        "UA":(49.0,32.0),"TR":(38.9,35.2),"IS":(64.9,-18.1),
+    }
+    if vast_key:
+        try:
+            q = json.dumps({
+                "gpu_ram":{"gte":24000},"num_gpus":{"eq":1},
+                "reliability":{"gte":0.95},"rentable":{"eq":True},
+                "cuda_max_good":{"gte":12.0},"direct_port_count":{"gte":1},
+            })
+            r = requests.get("https://console.vast.ai/api/v0/bundles/",
+                             params={"q":q},
+                             headers={"Authorization":f"Bearer {vast_key}"},
+                             timeout=12)
+            if r.ok:
+                from collections import defaultdict as _dd
+                by_cc: Dict = _dd(lambda: {"count":0,"gpus":{},"min_price":999,"lat":0,"lon":0})
+                for offer in r.json().get("offers",[]):
+                    geo_str = offer.get("geolocation","") or ""
+                    parts = geo_str.split(",")
+                    cc = parts[-1].strip()[:2].upper() if parts else "??"
+                    gpu   = offer.get("gpu_name","?")
+                    price = offer.get("dph_total") or 0
+                    by_cc[cc]["count"] += 1
+                    by_cc[cc]["lat"]    = LOC_COORDS.get(cc,(0,0))[0]
+                    by_cc[cc]["lon"]    = LOC_COORDS.get(cc,(0,0))[1]
+                    by_cc[cc]["min_price"] = min(by_cc[cc]["min_price"], price)
+                    by_cc[cc]["gpus"][gpu] = by_cc[cc]["gpus"].get(gpu,0)+1
+                for cc, info in by_cc.items():
+                    dist = haversine(user_lat,user_lon,info["lat"],info["lon"]) if info["lat"] else 99999
+                    top  = sorted(info["gpus"].items(), key=lambda x:-x[1])[:4]
+                    result["vast"].append({
+                        "country":   cc,
+                        "count":     info["count"],
+                        "min_price": round(info["min_price"],3),
+                        "dist_km":   int(dist),
+                        "top_gpus":  [{"gpu":g,"count":c} for g,c in top],
+                    })
+                result["vast"].sort(key=lambda x: x["dist_km"])
+        except Exception as e:
+            result["vast_error"] = str(e)
+
+    return jsonify(result)
+
 @app.route("/billing/overview", methods=["GET"])
 def billing_overview():
     """
@@ -1006,6 +1116,7 @@ def billing_overview():
     # ── Vast.ai ───────────────────────────────────────────────────
     if vast_key:
         try:
+            now = time.time()
             r = requests.get(
                 "https://console.vast.ai/api/v0/instances/",
                 headers={"Authorization": f"Bearer {vast_key}"},
@@ -1016,19 +1127,24 @@ def billing_overview():
                     status = inst.get("actual_status", "")
                     if status not in ("running", "loading", "exited"):
                         continue
-                    price     = inst.get("dph_total") or 0
-                    uptime_s  = inst.get("duration") or 0  # seconds running
-                    cost_so_far = round(price * uptime_s / 3600, 4) if uptime_s else 0
+                    price      = inst.get("dph_total") or 0
+                    # start_date is a unix timestamp (float seconds since epoch)
+                    start_ts   = inst.get("start_date") or inst.get("start_time") or 0
+                    uptime_s   = max(0, int(now - start_ts)) if start_ts else 0
+                    cost_so_far = round(price * uptime_s / 3600, 4)
                     result["vast"].append({
                         "id":       inst.get("id"),
                         "label":    inst.get("label", ""),
                         "gpu":      inst.get("gpu_name", "?"),
                         "status":   status,
                         "price":    round(price, 4),
-                        "uptime_s": int(uptime_s),
+                        "uptime_s": uptime_s,
                         "cost":     cost_so_far,
                         "ssh_host": inst.get("ssh_host", ""),
                         "ssh_port": inst.get("ssh_port", ""),
+                        # debug — remove once timing confirmed correct
+                        "_start_date": start_ts,
+                        "_now": int(now),
                     })
         except Exception as e:
             result["error"] = str(e)

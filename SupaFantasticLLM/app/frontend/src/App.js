@@ -758,6 +758,269 @@ function InlineSSHTerminal() {
 }
 
 
+
+// ─────────────────────────────────────
+// SCAN RESULTS MODAL
+// ─────────────────────────────────────
+function ScanModal({ data, onClose }) {
+  const vast   = data?.vast   || [];
+  const runpod = data?.runpod || [];
+
+  const fmtDist = km => {
+    if (!km || km >= 99000) return "?";
+    if (km < 1000) return `${km} km`;
+    return `${(km/1000).toFixed(1)}k km`;
+  };
+  const fmtGpu = s => s.replace("NVIDIA ","").replace("GeForce ","").replace("RTX_","RTX ").replace(/_/g," ");
+
+  // Best picks
+  const cheapestVast   = [...vast].sort((a,b) => a.min_price - b.min_price)[0];
+  const closestVast    = vast[0]; // already sorted by dist
+  const cheapestRunpod = runpod[0]; // already sorted by price
+
+  const Section = ({label}) => (
+    <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",
+      color:"var(--color-text-muted)",padding:"10px 20px 4px",borderTop:"1px solid var(--color-border)"}}>
+      {label}
+    </div>
+  );
+
+  return (
+    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+      position:"fixed",inset:0,zIndex:3000,background:"rgba(0,0,0,0.7)",
+      display:"flex",alignItems:"center",justifyContent:"center",
+    }}>
+      <div style={{
+        background:"var(--color-panel)",borderRadius:"10px",
+        border:"1px solid var(--color-border)",boxShadow:"0 24px 80px rgba(0,0,0,0.8)",
+        width:"min(640px,95vw)",maxHeight:"85vh",display:"flex",flexDirection:"column",
+        overflow:"hidden",
+      }}>
+        {/* Header */}
+        <div style={{padding:"14px 20px",borderBottom:"1px solid var(--color-border)",
+          display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:"15px",color:"var(--color-text)"}}>🔍 Host Scan Results</div>
+            {data?.user_location && (
+              <div style={{fontSize:"11px",color:"var(--color-text-muted)",marginTop:"2px"}}>
+                📍 {data.user_location}
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} style={{background:"transparent",border:"none",
+            cursor:"pointer",color:"var(--color-text-muted)",fontSize:"20px",padding:"4px"}}>×</button>
+        </div>
+
+        {/* Scrollable body */}
+        <div style={{overflowY:"auto",flex:1}}>
+
+          {/* Best picks */}
+          {(cheapestVast || cheapestRunpod) && (
+            <>
+              <Section label="⭐ Best Options" />
+              <div style={{padding:"6px 20px 10px",display:"flex",flexDirection:"column",gap:"6px"}}>
+                {closestVast && (
+                  <div style={{display:"flex",alignItems:"center",gap:"8px",padding:"8px 12px",
+                    borderRadius:"6px",background:"rgba(74,222,128,0.07)",border:"1px solid rgba(74,222,128,0.2)"}}>
+                    <span style={{fontSize:"18px"}}>📍</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:"12px",fontWeight:600,color:"var(--color-text)"}}>
+                        Closest — Vast.ai {closestVast.country}  ·  {fmtDist(closestVast.dist_km)} away
+                      </div>
+                      <div style={{fontSize:"11px",color:"var(--color-text-muted)"}}>
+                        {closestVast.count} offers · from <b style={{color:"var(--color-accent)"}}>${closestVast.min_price}/hr</b>
+                        {closestVast.top_gpus?.[0] && ` · ${fmtGpu(closestVast.top_gpus[0].gpu)}`}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {cheapestVast && cheapestVast.country !== closestVast?.country && (
+                  <div style={{display:"flex",alignItems:"center",gap:"8px",padding:"8px 12px",
+                    borderRadius:"6px",background:"rgba(88,166,255,0.07)",border:"1px solid rgba(88,166,255,0.2)"}}>
+                    <span style={{fontSize:"18px"}}>💰</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:"12px",fontWeight:600,color:"var(--color-text)"}}>
+                        Cheapest — Vast.ai {cheapestVast.country}  ·  {fmtDist(cheapestVast.dist_km)} away
+                      </div>
+                      <div style={{fontSize:"11px",color:"var(--color-text-muted)"}}>
+                        {cheapestVast.count} offers · from <b style={{color:"var(--color-accent)"}}>${cheapestVast.min_price}/hr</b>
+                        {cheapestVast.top_gpus?.[0] && ` · ${fmtGpu(cheapestVast.top_gpus[0].gpu)}`}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {cheapestRunpod && (
+                  <div style={{display:"flex",alignItems:"center",gap:"8px",padding:"8px 12px",
+                    borderRadius:"6px",background:"rgba(251,191,36,0.07)",border:"1px solid rgba(251,191,36,0.2)"}}>
+                    <span style={{fontSize:"18px"}}>⚡</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:"12px",fontWeight:600,color:"var(--color-text)"}}>
+                        RunPod — {fmtGpu(cheapestRunpod.gpu)}  ·  {cheapestRunpod.vram}GB VRAM
+                      </div>
+                      <div style={{fontSize:"11px",color:"var(--color-text-muted)"}}>
+                        ×{cheapestRunpod.count} available globally · <b style={{color:"var(--color-accent)"}}>${cheapestRunpod.price}/hr</b>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* RunPod table */}
+          {runpod.length > 0 && (
+            <>
+              <Section label={`⚡ RunPod Community Cloud — ${runpod.length} GPU types available`} />
+              <div style={{padding:"4px 20px 10px"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px"}}>
+                  <thead>
+                    <tr style={{color:"var(--color-text-muted)",fontSize:"10px",textTransform:"uppercase"}}>
+                      <th style={{textAlign:"left",padding:"4px 8px",fontWeight:600}}>GPU</th>
+                      <th style={{textAlign:"right",padding:"4px 8px",fontWeight:600}}>VRAM</th>
+                      <th style={{textAlign:"right",padding:"4px 8px",fontWeight:600}}>Available</th>
+                      <th style={{textAlign:"right",padding:"4px 8px",fontWeight:600}}>Price/hr</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {runpod.map((g,i) => (
+                      <tr key={i} style={{borderTop:"1px solid var(--color-border)",
+                        background: i%2===0?"transparent":"rgba(255,255,255,0.02)"}}>
+                        <td style={{padding:"6px 8px",color:"var(--color-text)",fontFamily:"var(--font-family-mono)",fontSize:"11px"}}>
+                          {fmtGpu(g.gpu)}
+                        </td>
+                        <td style={{padding:"6px 8px",textAlign:"right",color:"var(--color-text-muted)"}}>
+                          {g.vram}GB
+                        </td>
+                        <td style={{padding:"6px 8px",textAlign:"right",color:"var(--color-success,#4ade80)",fontWeight:700}}>
+                          ×{g.count}
+                        </td>
+                        <td style={{padding:"6px 8px",textAlign:"right",color:"var(--color-accent)",fontWeight:600}}>
+                          ${g.price}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {runpod.length === 0 && !data?.runpod_error && (
+            <>
+              <Section label="⚡ RunPod" />
+              <div style={{padding:"8px 20px 10px",fontSize:"12px",color:"var(--color-text-muted)"}}>
+                No community cloud GPUs available right now. Try again later.
+              </div>
+            </>
+          )}
+
+          {/* Vast.ai by location */}
+          {vast.length > 0 && (
+            <>
+              <Section label={`🌐 Vast.ai — ${vast.reduce((s,l)=>s+l.count,0)} offers across ${vast.length} countries`} />
+              <div style={{padding:"4px 20px 12px",display:"flex",flexDirection:"column",gap:"4px"}}>
+                {vast.map((loc,i) => {
+                  const distColor = loc.dist_km < 2000 ? "var(--color-success,#4ade80)"
+                                  : loc.dist_km < 8000 ? "#facc15" : "#f87171";
+                  return (
+                    <div key={i} style={{padding:"7px 10px",borderRadius:"6px",
+                      border:"1px solid var(--color-border)",
+                      background: i===0 ? "rgba(74,222,128,0.04)" : "transparent"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                        <span style={{width:"8px",height:"8px",borderRadius:"50%",
+                          background:distColor,flexShrink:0,
+                          boxShadow:`0 0 6px ${distColor}`}} />
+                        <span style={{fontWeight:700,fontSize:"13px",color:"var(--color-text)",minWidth:"32px"}}>
+                          {loc.country}
+                        </span>
+                        <span style={{fontSize:"11px",color:"var(--color-success,#4ade80)",fontWeight:600}}>
+                          ×{loc.count} offers
+                        </span>
+                        <span style={{flex:1}}/>
+                        <span style={{fontSize:"11px",color:"var(--color-text-muted)"}}>
+                          {fmtDist(loc.dist_km)}
+                        </span>
+                        <span style={{fontSize:"12px",color:"var(--color-accent)",fontWeight:600}}>
+                          from ${loc.min_price}/hr
+                        </span>
+                      </div>
+                      <div style={{marginTop:"3px",marginLeft:"16px",fontSize:"10px",
+                        color:"var(--color-text-muted)",fontFamily:"var(--font-family-mono)"}}>
+                        {loc.top_gpus.map(g=>`${fmtGpu(g.gpu)} ×${g.count}`).join("  ·  ")}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Errors */}
+          {(data?.runpod_error || data?.vast_error) && (
+            <>
+              <Section label="⚠ Errors" />
+              <div style={{padding:"6px 20px 12px",fontSize:"11px",color:"#f87171",fontFamily:"var(--font-family-mono)"}}>
+                {data.runpod_error && <div>RunPod: {data.runpod_error}</div>}
+                {data.vast_error   && <div>Vast.ai: {data.vast_error}</div>}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────
+// HOST SCANNER (button only)
+// ─────────────────────────────────────
+function HostScanner() {
+  const [state,    setState]   = useState("idle");
+  const [data,     setData]    = useState(null);
+  const [showModal,setShowModal] = useState(false);
+
+  const scan = () => {
+    setState("scanning");
+    fetch("http://localhost:5000/scout/hosts")
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d => { setData(d); setState("done"); setShowModal(true); })
+      .catch(e => { console.error("Scout error:", e); setState("error"); });
+  };
+
+  return (
+    <>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"4px"}}>
+        <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",
+          letterSpacing:"0.08em",color:"var(--color-text-muted)"}}>
+          Scan Hosts
+        </div>
+        <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+          {state === "done" && (
+            <button onClick={() => setShowModal(true)} style={{
+              padding:"3px 8px",borderRadius:"4px",fontSize:"10px",
+              border:"1px solid var(--color-border)",background:"transparent",
+              color:"var(--color-text-muted)",cursor:"pointer",fontFamily:"var(--font-family)",
+            }}>View Results</button>
+          )}
+          <button onClick={scan} disabled={state==="scanning"} style={{
+            padding:"3px 10px",borderRadius:"5px",fontSize:"11px",fontWeight:600,
+            border:"1px solid var(--color-border)",background:"var(--color-surface)",
+            color:state==="scanning" ? "var(--color-text-muted)" : "var(--color-text)",
+            cursor:state==="scanning" ? "wait" : "pointer",fontFamily:"var(--font-family)",
+          }}>
+            {state==="scanning" ? "Scanning…" : state==="done" ? "↺ Rescan" : "⟳ Scan"}
+          </button>
+        </div>
+      </div>
+      {state === "error" && (
+        <div style={{fontSize:"10px",color:"var(--color-danger,#f87171)",marginBottom:"4px"}}>
+          Scan failed — check Flask logs and API keys in supa_config.env
+        </div>
+      )}
+      {showModal && data && <ScanModal data={data} onClose={() => setShowModal(false)} />}
+    </>
+  );
+}
+
 // ─────────────────────────────────────
 // BILLING OVERVIEW
 // ─────────────────────────────────────
@@ -1183,6 +1446,9 @@ function ModesPanel({ isOpen, config, onChange, onClose, onStart, onStop, loadin
                 </div>
               )}
 
+              {/* Host Scanner */}
+              <HostScanner onSelectProvider={provider => set("provider", provider)} />
+
               {/* Settings */}
               <CollapsibleHeader label="Settings" open={settingsOpen} onToggle={() => setSettingsOpen(v => !v)} />
               {settingsOpen && (<>
@@ -1222,6 +1488,8 @@ function ModesPanel({ isOpen, config, onChange, onClose, onStart, onStop, loadin
                 )}
               </>)}
 
+              <div style={{ height: "1px", background: "var(--color-border)", margin: "8px 0" }} />
+              <HostScanner />
               <div style={{ height: "1px", background: "var(--color-border)", margin: "8px 0" }} />
               <StartStopBtn />
             </>)}

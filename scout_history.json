@@ -295,5 +295,127 @@
         "comm_price": 0.34
       }
     }
+  },
+  {
+    "timestamp": "2026-05-16T16:38:59",
+    "findings": {
+      "NVIDIA A40": {
+        "label": "A40",
+        "vram": 48,
+        "comm_count": 1,
+        "sec_count": 10,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.35
+      },
+      "NVIDIA GeForce RTX 3090": {
+        "label": "RTX 3090",
+        "vram": 24,
+        "comm_count": 8,
+        "sec_count": 8,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.22
+      },
+      "NVIDIA GeForce RTX 3090 Ti": {
+        "label": "RTX 3090 Ti",
+        "vram": 24,
+        "comm_count": 4,
+        "sec_count": 0,
+        "comm_avail": true,
+        "sec_avail": false,
+        "comm_price": 0.27
+      },
+      "NVIDIA GeForce RTX 4090": {
+        "label": "RTX 4090",
+        "vram": 24,
+        "comm_count": 8,
+        "sec_count": 8,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.34
+      },
+      "NVIDIA GeForce RTX 5090": {
+        "label": "RTX 5090",
+        "vram": 32,
+        "comm_count": 8,
+        "sec_count": 8,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.69
+      },
+      "NVIDIA L4": {
+        "label": "L4",
+        "vram": 24,
+        "comm_count": 1,
+        "sec_count": 10,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.44
+      },
+      "NVIDIA L40": {
+        "label": "L40",
+        "vram": 48,
+        "comm_count": 10,
+        "sec_count": 8,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.69
+      },
+      "NVIDIA L40S": {
+        "label": "L40S",
+        "vram": 48,
+        "comm_count": 8,
+        "sec_count": 8,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.79
+      },
+      "NVIDIA RTX 5000 Ada Generation": {
+        "label": "RTX 5000 Ada",
+        "vram": 32,
+        "comm_count": 4,
+        "sec_count": 0,
+        "comm_avail": true,
+        "sec_avail": false,
+        "comm_price": 0.49
+      },
+      "NVIDIA RTX 6000 Ada Generation": {
+        "label": "RTX 6000 Ada",
+        "vram": 48,
+        "comm_count": 8,
+        "sec_count": 8,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.74
+      },
+      "NVIDIA RTX A5000": {
+        "label": "RTX A5000",
+        "vram": 24,
+        "comm_count": 10,
+        "sec_count": 10,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.16
+      },
+      "NVIDIA RTX A6000": {
+        "label": "RTX A6000",
+        "vram": 48,
+        "comm_count": 8,
+        "sec_count": 10,
+        "comm_avail": true,
+        "sec_avail": true,
+        "comm_price": 0.33
+      },
+      "NVIDIA RTX PRO 4500 Blackwell": {
+        "label": "RTX PRO 4500",
+        "vram": 32,
+        "comm_count": 0,
+        "sec_count": 4,
+        "comm_avail": false,
+        "sec_avail": true,
+        "comm_price": 0.34
+      }
+    }
   }
 ]

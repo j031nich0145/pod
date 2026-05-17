@@ -3,13 +3,13 @@
 runpod_scout.py — GPU availability scout: RunPod + Vast.ai
 ===========================================================
 Commands:
-    python3 ~/runpod/runpod_scout.py              # RunPod snapshot
-    python3 ~/runpod/runpod_scout.py --vast       # Vast.ai snapshot (no key needed)
-    python3 ~/runpod/runpod_scout.py --both       # RunPod + Vast.ai side-by-side
-    python3 ~/runpod/runpod_scout.py --poll 30    # Poll RunPod every 30 min
-    python3 ~/runpod/runpod_scout.py --report     # Accumulated availability report
-    python3 ~/runpod/runpod_scout.py --probe-dcs  # Test per-DC availability (creates+destroys pods)
-    python3 ~/runpod/runpod_scout.py --clear      # Wipe history
+    python3 ~/pod/runpod_scout.py              # RunPod snapshot
+    python3 ~/pod/runpod_scout.py --vast       # Vast.ai snapshot (no key needed)
+    python3 ~/pod/runpod_scout.py --both       # RunPod + Vast.ai side-by-side
+    python3 ~/pod/runpod_scout.py --poll 30    # Poll RunPod every 30 min
+    python3 ~/pod/runpod_scout.py --report     # Accumulated availability report
+    python3 ~/pod/runpod_scout.py --probe-dcs  # Test per-DC availability (creates+destroys pods)
+    python3 ~/pod/runpod_scout.py --clear      # Wipe history
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ MIN_VRAM_MB = 24000   # 24GB minimum for AWQ-32B
 
 RUNPOD_GQL   = "https://api.runpod.io/graphql"
 VAST_BUNDLES = "https://console.vast.ai/api/v0/bundles/"
-CONFIG_FILE  = Path.home() / "runpod" / "supa_config.env"
-HISTORY_FILE = Path.home() / "runpod" / "scout_history.json"
+CONFIG_FILE  = Path.home() / "pod" / "supa_config.env"
+HISTORY_FILE = Path.home() / "pod" / "scout_history.json"
 
 PROBE_DCS = [
     "US-CA-2", "US-TX-3", "US-KS-2", "US-GA-1", "EU-RO-1",

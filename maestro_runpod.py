@@ -35,9 +35,9 @@ CONFIG       = Path.home() / "pod" / "supa_config.env"
 SSH_KEY      = Path.home() / ".ssh" / "pod_key"
 
 DOCKER_IMAGE     = "vllm/vllm-openai:latest"
-DISK_GB          = 80
-MIN_MEMORY_GB    = 50    # system RAM minimum
-MIN_VCPU         = 4
+DISK_GB          = 50
+MIN_MEMORY_GB    = 20    # dont over-constrain
+MIN_VCPU         = 2
 
 # GPU priority order — cheapest viable 24GB+ first (from scout data)
 GPU_OPTIONS = [
@@ -55,7 +55,7 @@ GPU_OPTIONS = [
     "NVIDIA GeForce RTX 5090",          # $0.69  32GB
     "NVIDIA L40S",                      # $0.79  48GB
 ]
-CLOUD_OPTIONS = ["COMMUNITY", "SECURE"]
+CLOUD_OPTIONS = ["COMMUNITY"]  # SECURE requires enterprise access
 
 MODELS: Dict[str, Dict[str, Any]] = {
     "qwen-coder": {
@@ -203,7 +203,7 @@ def create_pod(api_key: str, gpu: str, cloud: str, ssh_pub: str) -> Optional[Dic
             "startSsh":         True,
             "minMemoryInGb":    MIN_MEMORY_GB,
             "minVcpuCount":     MIN_VCPU,
-            "envs": [
+            "env": [
                 {"key": "PUBLIC_KEY", "value": ssh_pub},
             ],
         }
@@ -475,8 +475,10 @@ def cmd_start(env: Dict[str, str], model: str,
     event("start_begin", model=model, image=DOCKER_IMAGE)
 
     # ── Find and create pod ───────────────────────────────────────
-    pod    = None
-    pod_id = None
+    pod         = None
+    pod_id      = None
+    supply_miss = 0
+    server_err  = 0
 
     for gpu in GPU_OPTIONS:
         for cloud in CLOUD_OPTIONS:
@@ -490,16 +492,26 @@ def cmd_start(env: Dict[str, str], model: str,
                     event("create_success", pod_id=pod_id, gpu=gpu, cloud=cloud)
                     break
                 else:
-                    log(f"  Unavailable")
+                    supply_miss += 1
+                    log(f"  No supply")
                     event("create_unavailable", gpu=gpu, cloud=cloud, reason="SUPPLY_CONSTRAINT")
             except Exception as e:
-                log(f"  Error: {e}")
-                event("create_unavailable", gpu=gpu, cloud=cloud, reason=str(e))
+                err_msg = str(e)
+                if "something went wrong" in err_msg.lower():
+                    server_err += 1
+                    log(f"  Server error (RunPod-side, not our request)")
+                else:
+                    supply_miss += 1
+                    log(f"  Unavailable: {err_msg[:80]}")
+                event("create_unavailable", gpu=gpu, cloud=cloud, reason=err_msg[:80])
         if pod:
             break
 
     if not pod or not pod_id:
-        die("No GPUs available across all options. Try again later.")
+        if server_err > supply_miss:
+            die(f"RunPod returned server errors for all GPU types. "
+                f"Check your API key has pod creation permissions, or try again in a few minutes.")
+        die(f"No GPUs available right now ({supply_miss} supply constraints). Try again later or switch to Vast.ai.")
 
     env["POD_ID"]       = pod_id
     env["ACTIVE_MODEL"] = model
