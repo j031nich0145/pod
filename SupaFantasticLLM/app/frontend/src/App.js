@@ -1489,8 +1489,6 @@ function ModesPanel({ isOpen, config, onChange, onClose, onStart, onStop, loadin
               </>)}
 
               <div style={{ height: "1px", background: "var(--color-border)", margin: "8px 0" }} />
-              <HostScanner />
-              <div style={{ height: "1px", background: "var(--color-border)", margin: "8px 0" }} />
               <StartStopBtn />
             </>)}
           </div>
